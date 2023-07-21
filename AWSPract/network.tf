@@ -1,0 +1,143 @@
+resource "aws_vpc" "ntier" {
+  cidr_block = var.ntier_vpc_info.vpc_range
+  tags = {
+    Name = "ntier"
+  }
+}
+
+resource "aws_subnet" "subnets" {
+  count = length(var.ntier_vpc_info.subnet_name)
+
+  cidr_block        = cidrsubnet(var.ntier_vpc_info.vpc_range, 8, count.index)
+  availability_zone = "${var.region}${var.ntier_vpc_info.subnet_azs[count.index]}"
+
+  vpc_id = aws_vpc.ntier.id
+  depends_on = [
+    aws_vpc.ntier
+  ]
+   tags = {
+    Name = var.ntier_vpc_info.subnet_name[count.index]
+  }
+
+}
+
+
+resource "aws_internet_gateway" "ntier_igw" {
+
+  vpc_id = local.vpc_id
+  tags = {
+    name = "ntier-igw"
+
+  }
+
+  depends_on = [
+    aws_vpc.ntier
+  ]
+
+}
+
+resource "aws_route_table" "Public" {
+
+  vpc_id = local.vpc_id
+  tags = {
+    Name = "Public"
+
+  }
+  route {
+    cidr_block = local.anywhere
+    gateway_id = aws_internet_gateway.ntier_igw.id
+
+  }
+
+  depends_on = [
+    aws_subnet.subnets
+  ]
+
+
+}
+
+resource "aws_route_table" "Private" {
+
+  vpc_id = local.vpc_id
+
+  tags = {
+    Name = "private"
+
+  }
+
+  depends_on = [
+    aws_subnet.subnets
+  ]
+
+}
+
+data "aws_subnets" "public" {
+
+
+  filter {
+    name   = "tag:name"
+    values = ["var.ntier_vpc_info.public_subnets"]
+  }
+  filter {
+    name   = "vpc-id"
+    values = [local.vpc_id]
+  }
+
+  depends_on = [
+    aws_subnet.subnets
+  ]
+}
+
+data "aws_subnets" "private" {
+
+
+  filter {
+    name   = "tag:name"
+    values = ["var.ntier_vpc_info.private_subnets"]
+  }
+
+  filter {
+    name   = "vpc-id"
+    values = [local.vpc_id]
+  }
+  depends_on = [
+    aws_subnet.subnets
+  ]
+}
+resource "aws_route_table_association" "public" {
+  count          = length(data.aws_subnets.public.ids)
+  route_table_id = aws_route_table.Public.id
+  subnet_id      = data.aws_subnets.public.ids[count.index]
+}
+
+
+resource "aws_route_table_association" "private" {
+  count          = length(data.aws_subnets.private.ids)
+  route_table_id = aws_route_table.Private.id
+  subnet_id      = data.aws_subnets.private.ids[count.index]
+
+}
+
+
+resource "aws_security_group" "web" {
+  name = "web"
+  ingress {
+    from_port   = local.ssh_port
+    to_port     = local.ssh_port
+    cidr_blocks = [local.anywhere]
+    protocol    = local.tcp
+  }
+  ingress {
+    from_port   = local.http_port
+    to_port     = local.http_port
+    cidr_blocks = [local.anywhere]
+    protocol    = local.tcp
+  }
+  tags = {
+    Name = "web"
+  }
+  vpc_id = local.vpc_id
+  depends_on = [
+    aws_subnet.subnets
+  ]
+}
